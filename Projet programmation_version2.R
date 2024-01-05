@@ -65,7 +65,22 @@ ui <- fluidPage(
                )
              )
     ),
-    tabPanel('Prétraitement de données'
+    tabPanel('Prétraitement de données',
+      sidebarLayout(
+         sidebarPanel(
+         actionButton("dummify_button", "Dummification"),
+         selectInput("normalization_method", "Méthodes de normalisation:", 
+                    choices = c("Normalisation Min-Max", "Normalisation standardisée"),selected=NULL),
+         actionButton("generate_final_table_button", "Générer le tableau final")
+         ),
+      mainPanel(
+        tabsetPanel(
+          tabPanel('Tableau dummifié', dataTableOutput('dummified_table')),
+          tabPanel('Tableau normalisé', dataTableOutput('normalized_table')),
+          tabPanel('Tableau final',dataTableOutput('final_table'))
+        )
+      )
+    )
     ),
     tabPanel('Choix et entrainement du modèle',
              sidebarLayout(
@@ -88,6 +103,8 @@ server <- function(input, output,session){
   file_data <- reactiveVal(NULL)
   imputed_data <- reactiveVal(NULL)
   selected_variable_single_type <- reactiveVal(NULL)
+  normalized_data <- reactiveVal(NULL)
+  dummified_data <- reactiveVal(NULL)
   
   
   observeEvent(input$load_data, {
@@ -144,12 +161,17 @@ server <- function(input, output,session){
   }
   #afficher tableau imputé
   output$data_imputed <- renderDataTable({
-    if (data_loaded()) {
+    if (data_loaded() & any(is.na(file_data()))) {
       imputed_data_val <- switch(input$imputation_option,
                              "Supprimer les lignes de NA" = na.omit(file_data()),
                              "Imputation par moyenne" = impute_mean(file_data()),
                              "Imputation par médiane" = impute_median(file_data()))
       imputed_data(imputed_data_val)
+      return(imputed_data_val)
+    }
+    else {
+      imputed_data_val <- file_data()
+      imputed_data(file_data())
       return(imputed_data_val)
     }
   })
@@ -264,8 +286,12 @@ server <- function(input, output,session){
         column(6, tableOutput("continueSummaryTable"))
       )
     } else if (var_type == "qualitative") {
-        tagList()  # Laissez le résultat vide pour l'instant
-      }
+        fluidRow(
+          column(6,plotOutput("qualitativecolonne")),
+          column(6,plotOutput("qualitativesecteur")),
+          column(12,tableOutput("qualitativetable"))
+        )  
+    }
   })
   
   # Définition du diagramme en bâtons pour variable quantitative discrète
@@ -283,8 +309,12 @@ server <- function(input, output,session){
     var_type <- selected_variable_single_type()
     if (!is.null(var_type) && var_type == "quantitative_discrète") {
       discreteData <- imputed_data()[, input$variable_single]
-      plot(cumsum(table(discreteData)), col = "green4", xlab = input$variable_single, ylab = "Effectifs Cumulés",
-           main = paste("Fréquences cumulées pour",input$variable_single), type = "b", lty = 2)
+      # Tracé de la courbe des fréquences cumulées
+      plot(ecdf(discreteData), col = "green4", 
+           xlab = input$variable_single, 
+           ylab = "Fréquences Cumulées",
+           main = paste("Fréquences cumulées pour", input$variable_single),
+      )
     }
   })
   
@@ -327,8 +357,10 @@ server <- function(input, output,session){
     var_type <- selected_variable_single_type()
     if (!is.null(var_type) && var_type == "quantitative_continue") {
       continueData <- imputed_data()[, input$variable_single]
-      hist(continueData, col = "green4", xlab = input$variable_single, ylab = "Fréquence",
-           main = paste("Histogramme de",input$variable_single))
+      hist(continueData, probability = TRUE, col = "green4", 
+           xlab = input$variable_single, ylab = "Fréquence",
+           main = paste("Histogramme de", input$variable_single))
+      lines(density(continueData,bw=0.1), col = "red", lwd = 2)
     }
   })
   
@@ -374,10 +406,73 @@ server <- function(input, output,session){
     }
   })
   
+  #
+  output$qualitativecolonne <- renderPlot({
+   var_type <- selected_variable_single_type()
+   if (!is.null(var_type) && var_type == "qualitative") {
+      qualitativeData <- imputed_data()[, input$variable_single]
+      barplot(table(qualitativeData), main = paste("Catégories",input$variable_single), 
+            ylab = "Effectifs", las = 2,
+            names.arg =names(table(qualitativeData)))
+    }
+  })
   
-
+  output$qualitativesecteur <- renderPlot({
+    var_type <- selected_variable_single_type()
+    if (!is.null(var_type) && var_type == "qualitative") {
+      qualitativeData <- imputed_data()[, input$variable_single]
+      pie(table(qualitativeData), labels = names(table(qualitativeData)),
+        main = paste("Catégories", input$variable_single), col = c())
+    }
+  })
+  
+  output$qualitativetable <- renderTable({
+    var_type <- selected_variable_single_type()
+    if (!is.null(var_type) && var_type == "qualitative") {
+      qualitativeData <- imputed_data()[, input$variable_single]
+    effectifs <- table(qualitativeData)
+    effectifs
+  }}, colnames = FALSE)
   
   # Ajoutez le code pour le prétraitement des données et l'entraînement des modèles ici
+  output$dummified_table <- renderDataTable({
+      req(input$dummify_button)
+      if (data_loaded()) {
+      dummified_data_val <- imputed_data()
+      var_qualitative_dummified <- model.matrix(~ . + 0, data = imputed_data()[, variables_qualitatives])
+      dummified_data_val[,variables_qualitatives] <- var_qualitative_dummified
+      dummified_data(dummified_data_val)
+      return(dummified_data_val)
+      }
+  })
+  
+  output$normalized_table <- renderDataTable({
+    req(input$normalization_method)
+    if (data_loaded()) {
+      # Normalisation Min-Max
+      normalized_minmax_data <- imputed_data()
+      normalized_minmax_data[, variables_quantitatives] <- round(apply(imputed_data()[, variables_quantitatives], 2, function(x) (x - min(x)) / diff(range(x))),2)
+      
+      # Normalisation standardisée
+      normalized_standard_data <- imputed_data()
+      normalized_standard_data[,variables_quantitatives] <- round(scale(imputed_data()[,variables_quantitatives]),2)
+      normalized_data_val <- switch(input$normalization_method,
+                                "Normalisation Min-Max" = normalized_minmax_data,
+                                "Normalisation standardisée" = normalized_standard_data)
+      normalized_data(normalized_data_val)
+      return(normalized_data_val)
+    }
+  })
+  
+  output$final_table <- renderDataTable({
+    req(input$dummify_button,input$normalization_method,input$generate_final_table_button)
+    if (data_loaded()) {
+      standard_dummified_data <- imputed_data()
+      standard_dummified_data[,variables_quantitatives] <- normalized_data()[,variables_quantitatives]
+      standard_dummified_data[,variables_qualitatives] <- dummified_data()[,variables_qualitatives]
+      return(standard_dummified_data)
+    }
+  })
   
 }
 
