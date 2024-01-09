@@ -1,5 +1,6 @@
 library(shiny)
 library(DT)
+library(reshape2)
 
 chemin_hepatite_data <- "C:/Users/guoti/Documents/hepatitis/hepatite_data_correct.csv"
 
@@ -60,7 +61,8 @@ ui <- fluidPage(
                             verbatimTextOutput('selected_variables')),
                    tabPanel('Analyse unidimensionnelle',
                             uiOutput('univariate_analysis_ui')),
-                   tabPanel('Analyse bidimensionnelle')
+                   tabPanel('Analyse bidimensionnelle',
+                            uiOutput('bivariate_analysis_ui'))
                  )
                )
              )
@@ -99,10 +101,11 @@ ui <- fluidPage(
 server <- function(input, output,session){
 #Partie importation et visualisation du data initial  
   #Importer et charger les données
-  data_loaded <- reactiveVal(FALSE)
+  data_loaded <- reactiveVal(FALSE) 
   file_data <- reactiveVal(NULL)
   imputed_data <- reactiveVal(NULL)
   selected_variable_single_type <- reactiveVal(NULL)
+  selected_variable_dual_type <- reactiveVal(list(NULL,NULL))
   normalized_data <- reactiveVal(NULL)
   dummified_data <- reactiveVal(NULL)
   
@@ -231,6 +234,7 @@ server <- function(input, output,session){
     }
   })
   
+  # Analyse unidimensionnelle
   # Fonction pour identifier le type de la variable sélectionnée pour "variable single"
   identify_variable_single_type <- function(variable) {
     if (data_loaded()) {
@@ -289,7 +293,7 @@ server <- function(input, output,session){
         fluidRow(
           column(6,plotOutput("qualitativecolonne")),
           column(6,plotOutput("qualitativesecteur")),
-          column(12,tableOutput("qualitativetable"))
+          column(12,offset=3,tableOutput("qualitativetable"))
         )  
     }
   })
@@ -406,13 +410,13 @@ server <- function(input, output,session){
     }
   })
   
-  #
+  #variable qualitative
   output$qualitativecolonne <- renderPlot({
    var_type <- selected_variable_single_type()
    if (!is.null(var_type) && var_type == "qualitative") {
       qualitativeData <- imputed_data()[, input$variable_single]
       barplot(table(qualitativeData), main = paste("Catégories",input$variable_single), 
-            ylab = "Effectifs", las = 2,
+            ylab = "Effectifs", las = 1,
             names.arg =names(table(qualitativeData)))
     }
   })
@@ -474,7 +478,82 @@ server <- function(input, output,session){
     }
   })
   
+  # Analyse bidimensionnelle
+  
+  
+  # Observer pour détecter le changement dans la sélection de la variable
+  observeEvent(input$variable_dual, {
+    variables_selectionnees <- input$variable_dual
+    
+    if (length(variables_selectionnees) == 2) {
+      types <- lapply(variables_selectionnees, identify_variable_single_type)
+      selected_variable_dual_type(types)
+      }
+    })
+  
+  # Contenu pour l'onglet 'Analyse bidimensionnelle'
+  output$bivariate_analysis_ui <- renderUI({
+    vars_types <- selected_variable_dual_type() #mettre à jour les types des 2 variables sélectionnées
+    #dans vars_types y avait trois valeurs "quant discrète" "quant continue" et "qualit",mais là on veut que 2
+    vars_types <- lapply(vars_types, function(type) if (type != "qualitative") "quantitative" else type)
+    if (vars_types[1] == "quantitative" & vars_types[2]=="quantitative") {
+      fluidRow(
+        column(6,offset=2, plotOutput("NuagePointDroite"))
+        ,
+        column(6,offset=2, tableOutput("quantSummaryTable"))
+      )
+    } else if (vars_types[1] == "quantitative" & vars_types[2]=="qualitative") {
+      fluidRow(
+        column(6, plotOutput("continueHistogram")),
+        column(6, plotOutput("continueCumulativePlot")),
+        column(6, plotOutput("continueBoxPlot")),
+        column(6, tableOutput("continueSummaryTable"))
+      )
+    } else if (vars_types[1] == "qualitative" & vars_types[2]== "qualitative") {
+      fluidRow(
+        column(6,plotOutput("qualitativecolonne")),
+        column(6,plotOutput("qualitativesecteur")),
+        column(12,tableOutput("qualitativetable"))
+      )  
+    }
+  })
+  
+  # quant vs quant 
+  
+  #Nuage de point et droité régression
+  output$NuagePointDroite <- renderPlot({
+    x.var = input$variable_dual[1]
+    y.var = input$variable_dual[2]
+    plot(x = imputed_data()[, x.var], y = imputed_data()[, y.var], col = "blue",
+         las = 2, cex.axis = 0.7,
+         main = paste(y.var, "en fonction de", x.var),
+         xlab = x.var, ylab = y.var, cex.lab = 1.2
+    )
+    #Droite de régression linéaire (y~x) 
+    abline(lm(imputed_data()[, y.var]~imputed_data()[, x.var]), col="red", lwd = 2)
+  })
+  
+  #table statistique
+  output$quantSummaryTable <- renderTable({
+  x.var <- input$variable_dual[1]
+  y.var <- input$variable_dual[2]
+  mean_variable1 <- mean(imputed_data()[,x.var])
+  sd_variable1 <- sd(imputed_data()[,x.var])
+  mean_variable2 <- mean(imputed_data()[,y.var])
+  sd_variable2 <- sd(imputed_data()[,y.var])
+  correlation_coefficient <- cor(imputed_data()[,x.var], imputed_data()[,y.var])
+  
+  ligne1 <- c("moy. X", "moy. Y", "sd.X", "sd.Y", "corr(X,Y)")
+  ligne2 <- c(mean_variable1,mean_variable2,sd_variable1,sd_variable2,correlation_coefficient)
+  numeric_values <- t(as.matrix(ligne2))
+  df <- data.frame(ligne1, ligne2, check.names = FALSE)
+  colnames(df) <- NULL
+  df <- as.data.frame(t(df), stringsAsFactors = FALSE)
+  colnames(df) <- NULL
+  return(df)
+  })
 }
+
 
 shinyApp(ui = ui, server = server)
 
