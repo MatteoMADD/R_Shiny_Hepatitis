@@ -1,6 +1,7 @@
 library(shiny)
 library(DT)
 library(reshape2)
+library(ggplot2)
 
 chemin_hepatite_data <- "C:/Users/guoti/Documents/hepatitis/hepatite_data_correct.csv"
 
@@ -498,22 +499,20 @@ server <- function(input, output,session){
     vars_types <- lapply(vars_types, function(type) if (type != "qualitative") "quantitative" else type)
     if (vars_types[1] == "quantitative" & vars_types[2]=="quantitative") {
       fluidRow(
-        column(6,offset=2, plotOutput("NuagePointDroite"))
-        ,
+        column(6,offset=2, plotOutput("NuagePointDroite")),
         column(6,offset=2, tableOutput("quantSummaryTable"))
       )
-    } else if (vars_types[1] == "quantitative" & vars_types[2]=="qualitative") {
+     } else if ( (vars_types[1] == "quantitative" & vars_types[2]=="qualitative") | 
+                (vars_types[1] == "qualitative" & vars_types[2] == "quantitative") ) {
       fluidRow(
-        column(6, plotOutput("continueHistogram")),
-        column(6, plotOutput("continueCumulativePlot")),
-        column(6, plotOutput("continueBoxPlot")),
-        column(6, tableOutput("continueSummaryTable"))
+        column(6, plotOutput("boxplotGgplot")),
+        column(6, tableOutput("quantqualitable"))
       )
     } else if (vars_types[1] == "qualitative" & vars_types[2]== "qualitative") {
       fluidRow(
-        column(6,plotOutput("qualitativecolonne")),
-        column(6,plotOutput("qualitativesecteur")),
-        column(12,tableOutput("qualitativetable"))
+        column(6,plotOutput("barplotprofil")),
+        column(6,tableOutput("contingency")),
+        column(6,tableOutput("correlations"))
       )  
     }
   })
@@ -552,7 +551,113 @@ server <- function(input, output,session){
   colnames(df) <- NULL
   return(df)
   })
+  
+  output$boxplotGgplot <- renderPlot({
+    var1 <- input$variable_dual[1]
+    var2 <- input$variable_dual[2]
+    type_var1 <- identify_variable_single_type(var1)
+    type_var2 <- identify_variable_single_type(var2)
+    if (type_var1 == "qualitative" && type_var2 == "quantitative") {
+      var_qualit <- var1
+      var_quant <- var2
+    } else if (type_var1 == "quantitative" && type_var2 == "qualitative") {
+      var_qualit <- var2
+      var_quant <- var1
+    }
+    selected_data <- imputed_data()[, c(var_quant, var_qualit)]
+    ggplot(selected_data, aes(x = factor(get(var_qualit)), y = get(var_quant), fill = factor(get(var_qualit)))) +
+      geom_boxplot() +
+      geom_jitter(position = position_jitter(width = 0.2), size = 2) +
+      labs(x = "Modalités", y = "Mesures") +
+      theme(legend.title = element_blank())
+  })
+  
+  output$quantqualitable <- renderTable({
+    vars_types <- selected_variable_dual_type() 
+    vars_types <- lapply(vars_types, function(type) if (type != "qualitative") "quantitative" else type)
+    indice_quant <- which(vars_types == "quantitative")
+    indice_qualit <- which(vars_types == "qualitative")
+    var_qualit <- input$variable_dual[indice_qualit]
+    var_quant <- input$variable_dual[indice_quant]
+
+    statsSummary <- data.frame()
+    categories <- unique(imputed_data()[[var_qualit]])
+    # Pour chaque catégorie de la variable qualitative binaire
+    for (category in categories) {
+      tmp_stats <- c(
+        mean(imputed_data()[imputed_data()[[var_qualit]] == category, var_quant]),
+        sd(imputed_data()[imputed_data()[[var_qualit]] == category, var_quant])
+      )
+      statsSummary <- rbind.data.frame(statsSummary, tmp_stats)
+    }
+    # Statistiques globales
+    stats_total <- c(
+      mean(imputed_data()[[var_quant]]),
+      sd(imputed_data()[[var_quant]])
+    )
+    statsSummary <- cbind.data.frame(t(statsSummary), stats_total)
+    # Définition des row/colnames
+    nom_categories <- paste("catégorie",categories)
+    colnames(statsSummary) <- c(nom_categories,"Total")
+    rownames(statsSummary) <- c("Moyenne", "Écart-type")
+    statsSummary},rownames = TRUE, digits = 1)
+  
+   output$barplotprofil <- renderPlot({
+       # Diagramme de profils entre les variables 'x' et 'y'
+       x_var <-input$variable_dual[1]
+       y_var <-input$variable_dual[2]
+       data_subset <- imputed_data()[, c(x_var, y_var)]
+       data_subset[,x_var] <- factor(data_subset[,x_var],levels=unique(data_subset[,x_var]))
+       data_subset[,y_var] <- factor(data_subset[,y_var],levels=unique(data_subset[,y_var]))
+       ggplot(data_subset, aes_string(x = x_var, fill = y_var)) +
+         geom_bar(position = "dodge", stat = "count", width = 0.7, color = "black") +
+         scale_fill_manual(values = c("lightblue", "lightgreen"))
+   })
+   
+   output$contingency <- renderTable({
+       x_var <- input$variable_dual[1]
+       y_var <- input$variable_dual[2]
+       data_subset <- imputed_data()[,c(x_var,y_var)]
+       # Créer une table de contingence croisée
+       tab <- table(data_subset[,x_var], data_subset[,y_var])
+       tab_df <- as.data.frame(tab)
+       names(dimnames(tab)) <- c(x_var, y_var)
+       tab
+     })
+   
+   output$correlations <- renderTable({
+       x <- input$variable_dual[1]
+       y <- input$variable_dual[2]
+       data_subset <- imputed_data()[,c(x,y)]
+       df <- as.data.frame(matrix(NA, nrow = 3, ncol = 1))
+       rownames(df) = c("X2", "Phi2", "Cramer")
+       # La table de contingence des profils observés
+       tab = table(data_subset[,x], data_subset[,y])
+       # La table de contigence s'il y a indépendence
+       tab_indep = tab
+       n = sum(tab)
+       tab_rowSum = apply(tab, 2, sum)
+       tab_colSum = apply(tab, 1, sum)
+       
+       for(i in c(1:length(tab_colSum))){
+         for(j in c(1:length(tab_rowSum))){
+           tab_indep[i,j] = tab_colSum[i]*tab_rowSum[j]/n
+         }
+       }
+       
+       # Calcul du X²
+       df[1,1] = sum((tab-tab_indep)^2/tab_indep)
+       # Calcul du Phi²
+       df[2,1] = df[1,1]/n
+       # Calcul du Cramer
+       df[3,1] = sqrt(df[2,1]/(min(nrow(tab), ncol(tab))-1))
+       
+       df
+       
+     }, rownames=TRUE, colnames=FALSE)
+
 }
+
 
 
 shinyApp(ui = ui, server = server)
