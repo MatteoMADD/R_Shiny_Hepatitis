@@ -2,6 +2,8 @@ library(shiny)
 library(DT)
 library(reshape2)
 library(ggplot2)
+library(caret)
+library(glmnet)
 
 chemin_hepatite_data <- "C:/Users/guoti/Documents/hepatitis/hepatite_data_correct.csv"
 
@@ -88,11 +90,14 @@ ui <- fluidPage(
     tabPanel('Choix et entrainement du modèle',
              sidebarLayout(
                sidebarPanel(
-                 selectInput('model_selection', 'Choisir un modèle', choices = c('Modèle 1', 'Modèle 2', 'Modèle 3')),
+                 selectInput('variable_cible','choisir la variable cible',choices=NULL,selected=NULL),
+                 selectInput('model_selection', 'Choisir un modèle', choices = c('Logistic Regression', 'Modèle 2', 'Modèle 3')),
                  actionButton('train_model_button', 'Entraîner le modèle')
                ),
                mainPanel(
-                 # Contenu pour l'onglet 'Choix et entrainement du modèle'
+                 tabsetPanel(
+                   tabPanel('Resultats',verbatimTextOutput("model_summary"))
+                 )
                )
              )
     )
@@ -105,11 +110,13 @@ server <- function(input, output,session){
   data_loaded <- reactiveVal(FALSE) 
   file_data <- reactiveVal(NULL)
   imputed_data <- reactiveVal(NULL)
+  variables_quant <- reactiveVal(NULL)
+  variables_qualit <- reactiveVal(NULL)
   selected_variable_single_type <- reactiveVal(NULL)
   selected_variable_dual_type <- reactiveVal(list(NULL,NULL))
   normalized_data <- reactiveVal(NULL)
   dummified_data <- reactiveVal(NULL)
-  
+  final_data <- reactiveVal(NULL)
   
   observeEvent(input$load_data, {
     inFile <- input$file
@@ -232,9 +239,20 @@ server <- function(input, output,session){
       variables <- colnames(imputed_data())
       updateSelectInput(session, "variable_single", choices = variables)
       updateSelectInput(session, "variable_dual", choices = variables)
+      updateSelectInput(session,"variable_cible",choices=variables)
     }
   })
-  
+  observe({
+    if (data_loaded() && !is.null(imputed_data())) {
+      valeurs_uniques_par_colonne_importees <- apply(imputed_data(), 2, unique)
+      seuil <- 5
+      variables_qualitatives <- names(valeurs_uniques_par_colonne_importees[sapply(valeurs_uniques_par_colonne_importees, length) <= seuil])
+      variables_quantitatives <- names(valeurs_uniques_par_colonne_importees[sapply(valeurs_uniques_par_colonne_importees, length) > seuil])
+      variables_qualit(variables_qualitatives)
+      variables_quant(variables_quantitatives)
+    }
+  })
+
   # Analyse unidimensionnelle
   # Fonction pour identifier le type de la variable sélectionnée pour "variable single"
   identify_variable_single_type <- function(variable) {
@@ -439,46 +457,6 @@ server <- function(input, output,session){
     effectifs
   }}, colnames = FALSE)
   
-  # Ajoutez le code pour le prétraitement des données et l'entraînement des modèles ici
-  output$dummified_table <- renderDataTable({
-      req(input$dummify_button)
-      if (data_loaded()) {
-      dummified_data_val <- imputed_data()
-      var_qualitative_dummified <- model.matrix(~ . + 0, data = imputed_data()[, variables_qualitatives])
-      dummified_data_val[,variables_qualitatives] <- var_qualitative_dummified
-      dummified_data(dummified_data_val)
-      return(dummified_data_val)
-      }
-  })
-  
-  output$normalized_table <- renderDataTable({
-    req(input$normalization_method)
-    if (data_loaded()) {
-      # Normalisation Min-Max
-      normalized_minmax_data <- imputed_data()
-      normalized_minmax_data[, variables_quantitatives] <- round(apply(imputed_data()[, variables_quantitatives], 2, function(x) (x - min(x)) / diff(range(x))),2)
-      
-      # Normalisation standardisée
-      normalized_standard_data <- imputed_data()
-      normalized_standard_data[,variables_quantitatives] <- round(scale(imputed_data()[,variables_quantitatives]),2)
-      normalized_data_val <- switch(input$normalization_method,
-                                "Normalisation Min-Max" = normalized_minmax_data,
-                                "Normalisation standardisée" = normalized_standard_data)
-      normalized_data(normalized_data_val)
-      return(normalized_data_val)
-    }
-  })
-  
-  output$final_table <- renderDataTable({
-    req(input$dummify_button,input$normalization_method,input$generate_final_table_button)
-    if (data_loaded()) {
-      standard_dummified_data <- imputed_data()
-      standard_dummified_data[,variables_quantitatives] <- normalized_data()[,variables_quantitatives]
-      standard_dummified_data[,variables_qualitatives] <- dummified_data()[,variables_qualitatives]
-      return(standard_dummified_data)
-    }
-  })
-  
   # Analyse bidimensionnelle
   
   
@@ -506,7 +484,8 @@ server <- function(input, output,session){
                 (vars_types[1] == "qualitative" & vars_types[2] == "quantitative") ) {
       fluidRow(
         column(6, plotOutput("boxplotGgplot")),
-        column(6, tableOutput("quantqualitable"))
+        column(6, tableOutput("quantqualitable")),
+        column(6,textOutput("rapportdetermination"))
       )
     } else if (vars_types[1] == "qualitative" & vars_types[2]== "qualitative") {
       fluidRow(
@@ -552,11 +531,16 @@ server <- function(input, output,session){
   return(df)
   })
   
-  output$boxplotGgplot <- renderPlot({
+  #quant vs qualit
+  
+  output$boxplotGgplot <- renderPlot({ 
+    vars_types <- selected_variable_dual_type()
+    vars_types <- lapply(vars_types, function(type) if (type != "qualitative") "quantitative" else type)
+    type_var1 <- vars_types[1]
+    type_var2 <- vars_types[2]
     var1 <- input$variable_dual[1]
     var2 <- input$variable_dual[2]
-    type_var1 <- identify_variable_single_type(var1)
-    type_var2 <- identify_variable_single_type(var2)
+
     if (type_var1 == "qualitative" && type_var2 == "quantitative") {
       var_qualit <- var1
       var_quant <- var2
@@ -654,7 +638,87 @@ server <- function(input, output,session){
        
        df
        
-     }, rownames=TRUE, colnames=FALSE)
+    }, rownames=TRUE, colnames=FALSE)
+   
+   output$rapportdetermination <- renderText({
+     x <- input$variable_dual[1]
+     y <- input$variable_dual[2]
+     subset_data <- imputed_data()[,c(x,y)]
+     r <- cor(subset_data[,x],subset_data[,y])
+     R_2 <- r^2
+     paste("Le rapport de corrélation R^2 entre", x, "et", y, "est : ", round(R_2, 2))
+   })
+   
+   
+# Partie prétraitement des données
+   output$dummified_table <- renderDataTable({
+     req(input$dummify_button)
+     if (data_loaded()) {
+       dummified_data_val <- imputed_data()
+       variables_qualitatives <- variables_qualit()
+       var_qualitative_dummified <- model.matrix(~ . + 0, data = imputed_data()[, variables_qualitatives])
+       dummified_data_val[,variables_qualitatives] <- var_qualitative_dummified
+       dummified_data(dummified_data_val)
+       return(dummified_data_val)
+     }
+   })
+   
+   output$normalized_table <- renderDataTable({
+     req(input$normalization_method)
+     if (data_loaded()) {
+       variables_quantitatives <- variables_quant()
+       # Normalisation Min-Max
+       normalized_minmax_data <- imputed_data()
+       normalized_minmax_data[, variables_quantitatives] <- round(apply(imputed_data()[, variables_quantitatives], 2, function(x) (x - min(x)) / diff(range(x))),2)
+       
+       # Normalisation standardisée
+       normalized_standard_data <- imputed_data()
+       normalized_standard_data[,variables_quantitatives] <- round(scale(imputed_data()[,variables_quantitatives]),2)
+       normalized_data_val <- switch(input$normalization_method,
+                                     "Normalisation Min-Max" = normalized_minmax_data,
+                                     "Normalisation standardisée" = normalized_standard_data)
+       normalized_data(normalized_data_val)
+       return(normalized_data_val)
+     }
+   })
+   
+   output$final_table <- renderDataTable({
+     req(input$dummify_button,input$normalization_method,input$generate_final_table_button)
+     if (data_loaded()) {
+       standard_dummified_data <- imputed_data()
+       variables_qualitatives <- variables_qualit()
+       variables_quantitatives <- variables_quant()
+       standard_dummified_data[,variables_quantitatives] <- normalized_data()[,variables_quantitatives]
+       standard_dummified_data[,variables_qualitatives] <- dummified_data()[,variables_qualitatives]
+       final_data(standard_dummified_data)
+       return(standard_dummified_data)
+     }
+   })
+   
+# Partie Entraînement des modèles
+
+   output$model_summary <- renderPrint({
+     req(input$train_model_button)
+     if (!is.null(input$variable_cible) &&
+         input$model_selection == 'Logistic Regression') {
+     cible <- input$variable_cible
+     features <- setdiff(names(final_data()), cible)
+     set.seed(123)
+     index <- createDataPartition(final_data()[,cible], p = 0.8, list = FALSE)
+     train_data <- final_data()[index, ]
+     test_data <- final_data()[-index, ]
+     x_train <- as.matrix(train_data[, features])
+     y_train <- as.factor(train_data[, cible])
+     
+     # Ajuster le modèle avec validation croisée
+     model_logistic <- glm(formula = paste(cible, "~ ."), data = train_data, family = "binomial")
+     summary(model_logistic)
+     
+     }
+         
+   })
+   
+   
 
 }
 
