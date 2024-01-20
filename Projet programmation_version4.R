@@ -8,12 +8,6 @@ library(randomForest)
 library(pROC)
 
 
-#chemin_hepatite_data <- "C:/Users/guoti/Documents/hepatitis/hepatite_data_correct.csv"
-chemin_hepatite_data <- "C:\\Users\\carlo\\Desktop\\R_Shiny_Hepatitis\\hepatite_data_correct.csv"
-
-donnees_hepatite <- read.csv(chemin_hepatite_data, header = TRUE)
-
-
 ui <- fluidPage(
   titlePanel('Shiny App'),
   tabsetPanel(
@@ -98,19 +92,22 @@ ui <- fluidPage(
              sidebarLayout(
                sidebarPanel(
                  selectInput('variable_cible','choisir la variable cible',choices=NULL,selected=NULL),
-                 selectInput('model_selection', 'Choisir un modèle', choices = c('Logistic Regression', 'Random Forest', 'Modèle 3')),
+                 selectInput('model_selection', 'Choisir un modèle', choices = c('Logistic Regression', 'Random Forest', 'SVM')),
                  actionButton('train_model_button', 'Entraîner le modèle')
                ),
                mainPanel(
                  tabsetPanel(
-                   tabPanel('Resultats',uiOutput("model_ui"),
+                   id="tabs3",
+                   tabPanel('Model Logistic',uiOutput("model_logistic")),
+                   tabPanel('Model Random Forest',uiOutput("model_randomforest")),
+                   tabPanel('Model SVM',uiOutput("model_svm"))
                    )
                  )
                )
              )
     )
   )
-)
+
 
 server <- function(input, output,session){
   #Partie importation et visualisation du data initial  
@@ -125,8 +122,7 @@ server <- function(input, output,session){
   normalized_data <- reactiveVal(NULL)
   dummified_data <- reactiveVal(NULL)
   final_data <- reactiveVal(NULL)
-  rf_model <- reactiveVal(NULL)
-  roc_curve <- reactiveVal(NULL)
+
   
   observeEvent(input$load_data, {
     inFile <- input$file
@@ -747,74 +743,292 @@ server <- function(input, output,session){
   
   # Partie Entraînement des modèles
   
-  output$model_summary <- renderPrint({
+  # Partie Entraînement des modèles
+  #Fonction réactive pour entraîner le modèle
+  trainModel <- reactive({
     req(input$train_model_button)
-    if (!is.null(input$variable_cible) &&
-        input$model_selection == 'Logistic Regression') {
+    if (!is.null(input$variable_cible)) {
       cible <- input$variable_cible
       features <- setdiff(names(final_data()), cible)
       set.seed(123)
       index <- createDataPartition(final_data()[,cible], p = 0.8, list = FALSE)
       train_data <- final_data()[index, ]
       test_data <- final_data()[-index, ]
-      x_train <- as.matrix(train_data[, features])
-      y_train <- as.factor(train_data[, cible])
+      formula_str <- as.formula(paste(cible, "~ ."))
+      if (input$model_selection == 'Logistic Regression') {
+        model <- glm(formula = formula_str , data = train_data, family = "binomial")
+        pred <- predict(model, newdata = test_data,type='response')                  }
       
-      # Ajuster le modèle avec validation croisée
-      model_logistic <- glm(formula = paste(cible, "~ ."), data = train_data, family = "binomial")
-      summary(model_logistic)
-      
-    }else if (!is.null(input$variable_cible) &&
-            input$model_selection == 'Random Forest') {
-      cible <- input$variable_cible
-      features <- setdiff(names(final_data()), cible)
-      set.seed(123)
-      index <- createDataPartition(final_data()[,cible], p = 0.8, list = FALSE)
-      train_data <- final_data()[index, ]
-      test_data <- final_data()[-index, ]
-      x_train <- train_data[, features]
-      y_train <- train_data[, cible]
-      rf_model(randomForest(x = x_train,
-                               y = as.factor(y_train),
-                               ntree = 500,
-                               importance = TRUE))
-      x_test <- test_data[, features]
-      y_test <- test_data[, cible]
-      predictions <- predict(rf_model(), newdata = x_test)
-      
-      # Curva ROC y AUC
-      roc_curve(roc(as.numeric(as.factor(y_test)), as.numeric(predictions)))
-      print(rf_model())
-    }
-    
+      else if (input$model_selection == 'Random Forest') {
+        train_data[,cible] <- factor(train_data[,cible], levels = c("0", "1"))
+        model <- randomForest(formula_str, data = train_data, ntree = 500)
+        pred <- predict(model, newdata = test_data)  
+        
+      } else if (input$model_selection == 'SVM') {
+        model <- svm(formula = formula_str , data = train_data,kernel = "linear")
+        pred <- predict(model,newdata=test_data)
+      }
+      return(list(model = model, pred = pred,test_data=test_data,cible=cible))       }
   })
   
-  output$roc_curve <- renderPlot({
-    req(input$train_model_button)
-    if (!is.null(input$variable_cible) &&
-        input$model_selection == 'Random Forest' &&
-        !is.null(roc_curve())){
-      plot(roc_curve(), main = "Curve ROC", col = "blue", lwd = 2, legacy.axes = TRUE)
-      abline(a = 0, b = 1, col = "red", lty = 2) 
-    }
-  })
-  output$auc_value <- renderPrint({
-    req(input$train_model_button)
-    if (!is.null(input$variable_cible) &&
-        input$model_selection == 'Random Forest' &&
-        !is.null(roc_curve())){
-      auc_value <- auc(roc_curve())
-      paste("AUC =", round(auc(roc_curve()), 2))
-    }
-    
-  })
+  # Model logistic
   
-  output$model_ui <- renderUI({
+  output$model_logistic <- renderUI({
     fluidRow(
-        column(6, verbatimTextOutput("model_summary")),
-        column(6, plotOutput("roc_curve")),
-        column(6, verbatimTextOutput('auc_value'))
+      # Colonne de gauche
+      column(6, verbatimTextOutput("summary_model1")),
+      # Colonne de droite
+      column(6,
+             fluidRow(
+               column(12, verbatimTextOutput("metrics1")),
+               column(12, plotOutput("aucroc1"))
+             )
+      ),
+      # Importances (tout en bas)
+      column(12, plotOutput("importances1"))
     )
+  })
+  
+  
+  output$summary_model1 <- renderText({
+    if (!is.null(trainModel())) {
+      model_logistic <- trainModel()$model
+      summary_text <- capture.output(summary(model_logistic))
+      paste("Résumé du modèle logistique :\n", paste(summary_text, collapse = "\n"))
+    }
+  })
+  
+  output$metrics1 <- renderText({
+    if (!is.null(trainModel())) {
+      pred <- trainModel()$pred
+      test_data <- trainModel()$test_data
+      cible <- trainModel()$cible
+      predicted_classes <- ifelse(pred > 0.5, 1, 0)
+      test_data[, cible] <- factor(test_data[, cible], levels = c("0", "1"))
+      predicted_classes <- factor(predicted_classes, levels = c("0", "1"))
+      metrics <- confusionMatrix(predicted_classes,test_data[,cible])
+      
+      confusion_table <- as.table(metrics$table)
+      # Les métriques
+      accuracy <- round(metrics$overall["Accuracy"], 3)
+      precision <- round(metrics$byClass["Precision"], 3)
+      recall <- round(metrics$byClass["Recall"], 3)
+      f1_score <- round(2 * (precision * recall) / (precision + recall),3)
+      
+      
+      metrics_output <- capture.output({
+        print(as.table(metrics$table))
+        cat("\n")
+        print(paste("Accuracy:", accuracy))
+        print(paste("Precision:", precision))
+        print(paste("Recall:", recall))
+        print(paste("F1-Score:", f1_score))
+      })
+      
+      # Créer une chaîne de caractères pour l'affichage
+      result_text <- paste(metrics_output, collapse = "\n")
+      return(result_text)
+    }
+  })
+  
+  output$aucroc1 <- renderPlot({
+    pred <- trainModel()$pred
+    pred <- as.numeric(pred)
+    test_data <- trainModel()$test_data
+    cible <- trainModel()$cible
+    ROC <- roc(test_data[,cible],pred)
+    AUC <- round(auc(ROC), 4)
+    plot(ROC, col = "#02babc", family = "sans", cex = 2, main =paste("Logistic Regression Model - ROC Curve AUC =", AUC))
+  })
+  
+  output$importances1 <- renderPlot({
+    model_logistic <- trainModel()$model
+    importance_logistic <- varImp(model_logistic)
+    importance_df <- data.frame(
+      Feature = rownames(importance_logistic),
+      Importance = importance_logistic$Overall
+    )
+    ggplot(importance_df, aes(x = reorder(Feature, Importance), y = Importance)) +
+      geom_bar(stat = "identity", fill = "skyblue") +
+      geom_text(aes(label = round(Importance, 2)), vjust = -0.5) +
+      labs(title = "Importance des Caractéristiques",
+           x = "Caractéristique",
+           y = "Importance") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  })
+  
+  # Model random forest
+  
+  output$model_randomforest <- renderUI({
+    fluidRow(
+      column(6, verbatimTextOutput("summary_model2")),
+      column(6,plotOutput("aucroc2")),
+      column(6, verbatimTextOutput("metrics2")),
+      
+      
+      # Importances (tout en bas)
+      column(12, plotOutput("importances2"))
+    )
+  })
+  
+  
+  output$summary_model2 <- renderText({
+    if (!is.null(trainModel())) {
+      model_rf <- trainModel()$model
+      summary_text <- capture.output(print(model_rf))
+      
+      paste("Résumé du modèle randomforest :\n", paste(summary_text, collapse = "\n"))
+    }
+  })
+  
+  output$metrics2 <- renderText({
+    if (!is.null(trainModel())) {
+      pred <- trainModel()$pred
+      test_data <- trainModel()$test_data
+      cible <- trainModel()$cible
+      test_data[, cible] <- factor(test_data[, cible], levels = c("0", "1"))
+      pred <- factor(pred, levels = c("0", "1"))
+      metrics <- confusionMatrix(pred,test_data[,cible])
+      
+      confusion_table <- as.table(metrics$table)
+      # Les métriques
+      accuracy <- round(metrics$overall["Accuracy"], 3)
+      precision <- round(metrics$byClass["Precision"], 3)
+      recall <- round(metrics$byClass["Recall"], 3)
+      f1_score <- round(2 * (precision * recall) / (precision + recall),3)
+      
+      
+      metrics_output <- capture.output({
+        cat("\nMatrice de confusion:\n")
+        print(as.table(metrics$table))
+        cat("\n")
+        print(paste("Accuracy:", accuracy))
+        print(paste("Precision:", precision))
+        print(paste("Recall:", recall))
+        print(paste("F1-Score:", f1_score))
+      })
+      
+      # Créer une chaîne de caractères pour l'affichage
+      result_text <- paste(metrics_output, collapse = "\n")
+      return(result_text)
+    }
+  })
+  
+  output$aucroc2 <- renderPlot({
+    pred <- trainModel()$pred
+    pred <- as.numeric(pred)
+    test_data <- trainModel()$test_data
+    cible <- trainModel()$cible
+    ROC <- roc(test_data[,cible],pred)
+    AUC <- round(auc(ROC), 4)
+    plot(ROC, col = "#02babc", family = "sans", cex = 2, main =paste("Random Forest Model - ROC Curve AUC =", AUC))
+  })
+  
+  output$importances2 <- renderPlot({
+    model_rf <- trainModel()$model
+    importance_rf <- varImp(model_rf)
+    importance_df <- data.frame(
+      Feature = rownames(importance_rf),
+      Importance = importance_rf$Overall
+    )
+    ggplot(importance_df, aes(x = reorder(Feature, Importance), y = Importance)) +
+      geom_bar(stat = "identity", fill = "skyblue") +
+      geom_text(aes(label = round(Importance, 2)), vjust = -0.5) +
+      labs(title = "Importance des Caractéristiques",
+           x = "Caractéristique",
+           y = "Importance") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  })
+  
+  # Model svm
+  
+  output$model_svm <- renderUI({
+    fluidRow(
+      column(6, verbatimTextOutput("summary_model3")),
+      column(6,plotOutput("aucroc3")),
+      column(6, verbatimTextOutput("metrics3")),
+      
+      
+      # Importances (tout en bas)
+      column(12, plotOutput("importances3"))
+    )
+  })
+  
+  
+  output$summary_model3 <- renderText({
+    if (!is.null(trainModel())) {
+      model_svm <- trainModel()$model
+      summary_text <- capture.output(summary(model_svm))
+      
+      paste("Résumé du modèle svm :\n", paste(summary_text, collapse = "\n"))
+    }
+  })
+  
+  output$metrics3 <- renderText({
+    if (!is.null(trainModel())) {
+      pred <- trainModel()$pred
+      test_data <- trainModel()$test_data
+      cible <- trainModel()$cible
+      roc_curve <- roc(test_data[, cible], as.numeric(pred))
+      optimal_coords <- coords(roc_curve, "best", ret = c("threshold", "specificity", "sensitivity", "accuracy", "precision", "recall", "ppv", "npv"))
+      optimal_threshold <- optimal_coords$threshold
+      pred_classes <- ifelse(pred > optimal_threshold, 1, 0)
+      test_data[, cible] <- factor(test_data[, cible], levels = c("0", "1"))
+      pred_classes <- factor(pred_classes, levels = c("0", "1"))
+      metrics <- confusionMatrix(pred_classes,test_data[,cible])
+      
+      confusion_table <- as.table(metrics$table)
+      # Les métriques
+      accuracy <- round(metrics$overall["Accuracy"], 3)
+      precision <- round(metrics$byClass["Precision"], 3)
+      recall <- round(metrics$byClass["Recall"], 3)
+      f1_score <- round(2 * (precision * recall) / (precision + recall),3)
+      
+      
+      metrics_output <- capture.output({
+        cat("\nMatrice de confusion:\n")
+        print(as.table(metrics$table))
+        cat("\n")
+        print(paste("Accuracy:", accuracy))
+        print(paste("Precision:", precision))
+        print(paste("Recall:", recall))
+        print(paste("F1-Score:", f1_score))
+      })
+      
+      # Créer une chaîne de caractères pour l'affichage
+      result_text <- paste(metrics_output, collapse = "\n")
+      return(result_text)
+    }
+  })
+  
+  output$aucroc3 <- renderPlot({
+    pred <- trainModel()$pred
+    pred <- as.numeric(pred)
+    test_data <- trainModel()$test_data
+    cible <- trainModel()$cible
+    ROC <- roc(test_data[,cible],pred)
+    AUC <- round(auc(ROC), 4)
+    plot(ROC, col = "#02babc", family = "sans", cex = 2, main =paste("SVM Model - ROC Curve AUC =", AUC))
+  })
+  
+  output$importances3 <- renderPlot({
+    
+    model_svm <- trainModel()$model
+    coefficients <- coef(model_svm)
+    importance_df <- data.frame(
+      Feature = names(coefficients)[-1], 
+      Coefficient = coefficients[-1]
+    )
+    ggplot(importance_df, aes(x = reorder(Feature, Coefficient), y = Coefficient)) +
+      geom_bar(stat = "identity", fill = "skyblue") +
+      geom_text(aes(label = round(Coefficient, 2)), vjust = -0.5) +
+      labs(title = "Importance des Caractéristiques",
+           x = "Caractéristique",
+           y = "Importance") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
   })
   
   
