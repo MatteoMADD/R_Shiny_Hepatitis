@@ -6,6 +6,7 @@ library(caret)
 library(glmnet)
 library(randomForest)
 library(pROC)
+library(e1071)
 
 
 ui <- fluidPage(
@@ -97,7 +98,7 @@ ui <- fluidPage(
                ),
                mainPanel(
                  tabsetPanel(
-                   id="tabs3",
+                   id = "tabs3" ,
                    tabPanel('Model Logistic',uiOutput("model_logistic")),
                    tabPanel('Model Random Forest',uiOutput("model_randomforest")),
                    tabPanel('Model SVM',uiOutput("model_svm"))
@@ -774,6 +775,7 @@ server <- function(input, output,session){
   # Model logistic
   
   output$model_logistic <- renderUI({
+    req(input$model_selection == 'Logistic Regression')
     fluidRow(
       # Colonne de gauche
       column(6, verbatimTextOutput("summary_model1")),
@@ -791,6 +793,7 @@ server <- function(input, output,session){
   
   
   output$summary_model1 <- renderText({
+    req(input$model_selection == 'Logistic Regression')
     if (!is.null(trainModel())) {
       model_logistic <- trainModel()$model
       summary_text <- capture.output(summary(model_logistic))
@@ -799,6 +802,7 @@ server <- function(input, output,session){
   })
   
   output$metrics1 <- renderText({
+    req(input$model_selection == 'Logistic Regression')
     if (!is.null(trainModel())) {
       pred <- trainModel()$pred
       test_data <- trainModel()$test_data
@@ -832,6 +836,7 @@ server <- function(input, output,session){
   })
   
   output$aucroc1 <- renderPlot({
+    req(input$model_selection == 'Logistic Regression')
     pred <- trainModel()$pred
     pred <- as.numeric(pred)
     test_data <- trainModel()$test_data
@@ -842,6 +847,7 @@ server <- function(input, output,session){
   })
   
   output$importances1 <- renderPlot({
+    req(input$model_selection == 'Logistic Regression')
     model_logistic <- trainModel()$model
     importance_logistic <- varImp(model_logistic)
     importance_df <- data.frame(
@@ -861,6 +867,7 @@ server <- function(input, output,session){
   # Model random forest
   
   output$model_randomforest <- renderUI({
+    req(input$model_selection == 'Random Forest')
     fluidRow(
       column(6, verbatimTextOutput("summary_model2")),
       column(6,plotOutput("aucroc2")),
@@ -874,6 +881,7 @@ server <- function(input, output,session){
   
   
   output$summary_model2 <- renderText({
+    req(input$model_selection == 'Random Forest')
     if (!is.null(trainModel())) {
       model_rf <- trainModel()$model
       summary_text <- capture.output(print(model_rf))
@@ -883,6 +891,7 @@ server <- function(input, output,session){
   })
   
   output$metrics2 <- renderText({
+    req(input$model_selection == 'Random Forest')
     if (!is.null(trainModel())) {
       pred <- trainModel()$pred
       test_data <- trainModel()$test_data
@@ -916,6 +925,7 @@ server <- function(input, output,session){
   })
   
   output$aucroc2 <- renderPlot({
+    req(input$model_selection == 'Random Forest')
     pred <- trainModel()$pred
     pred <- as.numeric(pred)
     test_data <- trainModel()$test_data
@@ -926,6 +936,7 @@ server <- function(input, output,session){
   })
   
   output$importances2 <- renderPlot({
+    req(input$model_selection == 'Random Forest')
     model_rf <- trainModel()$model
     importance_rf <- varImp(model_rf)
     importance_df <- data.frame(
@@ -945,6 +956,7 @@ server <- function(input, output,session){
   # Model svm
   
   output$model_svm <- renderUI({
+    req(input$model_selection == 'SVM')
     fluidRow(
       column(6, verbatimTextOutput("summary_model3")),
       column(6,plotOutput("aucroc3")),
@@ -958,6 +970,8 @@ server <- function(input, output,session){
   
   
   output$summary_model3 <- renderText({
+    req(input$model_selection == 'SVM')
+    
     if (!is.null(trainModel())) {
       model_svm <- trainModel()$model
       summary_text <- capture.output(summary(model_svm))
@@ -967,6 +981,8 @@ server <- function(input, output,session){
   })
   
   output$metrics3 <- renderText({
+    req(input$model_selection == 'SVM')
+    
     if (!is.null(trainModel())) {
       pred <- trainModel()$pred
       test_data <- trainModel()$test_data
@@ -1004,6 +1020,8 @@ server <- function(input, output,session){
   })
   
   output$aucroc3 <- renderPlot({
+    req(input$model_selection == 'SVM')
+    
     pred <- trainModel()$pred
     pred <- as.numeric(pred)
     test_data <- trainModel()$test_data
@@ -1014,6 +1032,8 @@ server <- function(input, output,session){
   })
   
   output$importances3 <- renderPlot({
+    req(input$model_selection == 'SVM')
+    
     
     model_svm <- trainModel()$model
     coefficients <- coef(model_svm)
@@ -1030,6 +1050,18 @@ server <- function(input, output,session){
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
   })
+  observeEvent(req(input$model_selection =='Logistic Regression'), {
+    updateTabsetPanel(session, "tabs3", selected = "Model Logistic")
+  })
+  
+  observeEvent(req(input$model_selection =='Random Forest'), {
+    updateTabsetPanel(session, "tabs3", selected = "Model Random Forest")
+  })
+  
+  observeEvent(req(input$model_selection =='SVM'), {
+    updateTabsetPanel(session, "tabs3", selected = "Model SVM")
+  })
+  
   
   
 }
